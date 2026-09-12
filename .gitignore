@@ -6,6 +6,7 @@ __pycache__/
 
 
 data/raw_audio/
+data/filters.json
 data/transcripts_raw/
 models/
 *.mp3

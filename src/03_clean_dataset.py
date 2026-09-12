@@ -1,6 +1,6 @@
 import argparse
-import base64
 import glob
+import hashlib
 import json
 import os
 import re
@@ -8,125 +8,200 @@ import jsonlines
 
 INPUT_DIR = os.path.join("data", "transcripts_raw")
 OUTPUT_DIR = os.path.join("data", "dataset")
+FILTERS_FILE = os.path.join("data", "filters.json")
+
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+GENERIC_USER_PROMPTS = [
+    "Что думаешь по этому поводу?",
+    "Какие новости, друн?",
+    "Что интересного расскажешь?",
+    "Как настроение сегодня?",
+    "Поделись мыслями, как дела?",
+    "Что там у тебя происходит?",
+    "Есть какой-нибудь совет на сегодня?",
+    "Что скажешь на это?",
+]
 
-_ENCODED_HARD_FILTER = (
-    "XGIo0YXRg9C5W9C10ZHRj9C4XVvQsC3Rj10qfNCw0L3QsNC7KD8h0LjQt3zQuNGC0Lh80L7QMy"
-    "lb0LAt0Y9dKnzQsNC90YPRgdKbfcC+0YfQulvQvtCw0LXRg11b0LAt0Y9dKnzQtNGA0L7Rh1vQ"
-    "sC3Rj10qfNGI0LvRjtGFW9CwLdGPXSp80YjQsNC70LDQslvQsC3Rj10qfNC/0LjQtNC+0YJb0L"
-    "At0Y9dKnzQv9C40LTQsNGAW9CwLdGPXSp80LPQsNC90LTQvtC9W9CwLdGPXSp80LPQvtC90LTQ"
-    "vtC9W9CwLdGPXSp80LzQuNC90LXRgjtb0LAt0Y9dKnzQvtGC0YHQvtGBW9CwLdGPXSp80YfQu9"
-    "C10L1b0LAt0Y9dKnzRhtC10LvQulvQsC3Rj10qfNGB0LjRgdGM0Lpb0LAt0Y9dKnzQs9C+0LLQ"
-    "vdvQsC3Rj10qfNC00LXRgNGM0L1b0LAt0Y9dKnzQvtCx0L7RgdGAW9CwLdGPXSp80LzRgNCw0L"
-    "db0LAt0Y9dKnzRgtCy0LDRgNGMW9CwLdGPXSopXGI="
-)
-
-_ENCODED_STRIP_FILTER = (
-    "XGIo0LHQu1vRj9C1XVvQsC3Rj10qfNGB0YPQu1vQsC3Rj10qfNC90LDRhVvQsC3Rj10qfNGR0L"
-    "/RgtCwP3zQt9Cw0LvRg9C/W9CwLdGPXSp80L/QuNC30LRb0LAt0Y9dKilcYlssIS5dPz8="
-)
-
-
-_ENCODED_REPLACEMENTS = (
-    "eyJcXGLQv9C+0YXRg1vQudC40LXRj9GOXVvQsC3Rj10qXFxiIjogItCy0YHQtSDRgNCw0LLQvdC+"
-    "IiwgIlxcYtC90LDRhdGDW9C50Y9dXFxiIjogItC30LDRh9C10LwiLCAiXFxi0LTQvtGF0YNb0Y/Q"
-    "tV1b0LAt0Y9dKlxcYiIjogItC80L3QvtCz0L4iLCAiXFxi0L3QuNGF0YNb0Y/QtV1b0LAt0Y9dKl"
-    "xcYiIjogItC90LjRh9C10LPQviIsICJcXGLQvtGF0YNb0LXQtdC7XVvQsC3Rj10qXFxiIjogItCy"
-    "INGI0L7QutC1IiwgIlxcYtC10LFb0LAt0Y9dKlxcYiIjogItGA0LDQt9C90LXRgSJ9"
-)
+DEFAULT_FILTERS = {
+    "protected_fragments": [],
+    "blocked_substrings": [],
+    "blocked_stems": [],
+    "gambling_terms": [],
+    "safe_analogs": [],
+    "safe_ochko_forms": [],
+    "target_analogs": {},
+    "replacements": {},
+    "noise_phrases": [],
+}
 
 
-HARD_TOXIC_PATTERN = re.compile(
-    base64.b64decode(_ENCODED_HARD_FILTER).decode("utf-8"), re.IGNORECASE
-)
-PROFANITY_STRIP = re.compile(
-    base64.b64decode(_ENCODED_STRIP_FILTER).decode("utf-8"), re.IGNORECASE
-)
-REPLACEMENTS = json.loads(
-    base64.b64decode(_ENCODED_REPLACEMENTS).decode("utf-8")
-)
+def load_filters():
+    if not os.path.exists(FILTERS_FILE):
+        print(f"[!] Файл фильтров не найден: {FILTERS_FILE}")
+        return DEFAULT_FILTERS
 
-NOISE_PHRASES = ["ДИНАМИЧНАЯ МУЗЫКА", "[музыка]", "Субтитры делал"]
+    try:
+        with open(FILTERS_FILE, "r", encoding="utf-8") as file:
+            filters = json.load(file)
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"[!] Не удалось загрузить фильтры: {exc}")
+        return DEFAULT_FILTERS
+
+    result = DEFAULT_FILTERS.copy()
+    result.update(filters)
+    return result
 
 
-def sanitize_profanity(text: str) -> str:
-    """Мягкая замена и зачистка слов-паразитов."""
-    for pattern, repl in REPLACEMENTS.items():
-        text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
+FILTERS = load_filters()
 
-    text = PROFANITY_STRIP.sub("", text)
 
-    text = re.sub(r"\bвсе\s+все\s+равно\b", "все равно", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s*,\s*,+", ",", text)
-    text = re.sub(r"^[,\s.!?-]+", "", text)
-    text = re.sub(r"[,;\s]+$", ".", text)
+def normalize_text(text: str) -> str:
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def has_forbidden_words(text: str) -> bool:
+    normalized = text.lower().replace("ё", "е")
+    words = re.findall(r"[а-яa-z]+", normalized)
+
+    protected_fragments = FILTERS["protected_fragments"]
+    blocked_substrings = FILTERS["blocked_substrings"]
+    blocked_stems = FILTERS["blocked_stems"]
+    gambling_terms = FILTERS["gambling_terms"]
+    target_analogs = FILTERS["target_analogs"]
+
+    for word in words:
+        if any(fragment in word for fragment in protected_fragments):
+            continue
+
+        if any(fragment in word for fragment in blocked_substrings):
+            return True
+
+        if any(stem in word for stem in blocked_stems):
+            return True
+
+        if any(term in word for term in gambling_terms):
+            return True
+
+        for target, safe_words in target_analogs.items():
+            if target in word:
+                if not any(safe in word for safe in safe_words):
+                    return True
+
+    return False
+
+
+def sanitize_text(text: str) -> str:
+    replacements = FILTERS.get("replacements", {})
+
+    for pattern, replacement in replacements.items():
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+
+    text = re.sub(r"\s+", " ", text)
     text = re.sub(r"\s+([,.!?])", r"\1", text)
-    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"([,.!?])([^\s])", r"\1 \2", text)
+    text = re.sub(r"^[,\s.!?-]+", "", text)
+    text = re.sub(r"[,\s;]+$", ".", text)
+    text = text.strip()
 
     if text:
         text = text[0].upper() + text[1:]
+
     return text
 
 
 def clean_text(text: str) -> str:
     text = re.sub(r"\bбыл строй\b", "Меллстрой", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    return normalize_text(text)
+
+
+def contains_noise(text: str) -> bool:
+    lower_text = text.lower()
+    return any(phrase.lower() in lower_text for phrase in FILTERS["noise_phrases"])
 
 
 def generate_context_user_prompt(assistant_text: str) -> str:
     text_lower = assistant_text.lower()
-    if "зал" in text_lower or "тренировк" in text_lower:
-        return "Что посоветуешь по поводу спорта и формы?"
-    elif "привет" in text_lower or "с вами" in text_lower:
-        return "Привет! Как тебя зовут и чем сегодня займемся?"
-    elif "босс" in text_lower or "начальник" in text_lower:
-        return "Как оцениваешь мои успехи?"
-    elif "бурмалд" in text_lower or "хамам" in text_lower:
-        return "Как лучше всего провести вечер?"
-    else:
-        return "Поделись мыслями, что думаешь по ситуации?"
+
+    context_rules = [
+        (["бабк", "деньг", "рулит", "мутит", "кошельк"], "Как там с финансами и движухой?"),
+        (["сын", "сыр", "сочит", "друн"], "Что там у тебя за истории происходят?"),
+        (["лагер", "поехал", "дело"], "Куда ты собрался и какие планы?"),
+        (["конфетк", "танцу", "девочк", "детк"], "Что за трек или девчонка там у тебя?"),
+        (["иди", "уход", "выгон"], "Мне остаться или лучше уйти?"),
+        (["зал", "спорт", "трен"], "Что посоветуешь по поводу спорта и формы?"),
+        (["привет", "с вами"], "Привет! Как тебя зовут и чем сегодня займемся?"),
+        (["босс", "начальн"], "Как оцениваешь мои успехи?"),
+        (["бурмалд", "хамам"], "Как лучше всего провести вечер?"),
+    ]
+
+    for keywords, prompt in context_rules:
+        if any(keyword in text_lower for keyword in keywords):
+            return prompt
+
+    digest = hashlib.sha256(assistant_text.encode("utf-8")).digest()
+    index = int.from_bytes(digest[:4], "big") % len(GENERIC_USER_PROMPTS)
+    return GENERIC_USER_PROMPTS[index]
 
 
-def process_dataset(mode="white"):
-    input_files = glob.glob(f"{INPUT_DIR}/*.json")
+def make_dedup_key(text: str) -> str:
+    normalized = text.lower().replace("ё", "е")
+    normalized = re.sub(r"[^\w\s]", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized.strip()
+
+
+def process_dataset(mode: str = "white") -> None:
+    input_files = sorted(glob.glob(os.path.join(INPUT_DIR, "*.json")))
+
+    if not input_files:
+        print(f"[!] JSON-файлы не найдены: {INPUT_DIR}")
+        return
+
     output_filename = f"train_{mode}.jsonl"
     output_path = os.path.join(OUTPUT_DIR, output_filename)
 
-    system_prompt = (
-        "Ты — виртуальный собеседник, общающийся на интернет-жаргоне молодежных сообществ."
-        if mode == "white"
-        else "Ты — персонаж интернет-культуры. Отвечай эмоционально в своем фирменном стиле."
-    )
+    if mode == "white":
+        system_prompt = "Ты — виртуальный собеседник, общающийся на интернет-жаргоне молодежных сообществ."
+    else:
+        system_prompt = "Ты — персонаж интернет-культуры. Отвечай эмоционально в своем фирменном стиле."
 
     seen_texts = set()
+
     valid_samples = 0
     skipped_noise = 0
     dropped_toxic = 0
     duplicate_samples = 0
+    invalid_files = 0
 
     with jsonlines.open(output_path, mode="w") as writer:
         for filepath in input_files:
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            try:
+                with open(filepath, "r", encoding="utf-8") as file:
+                    data = json.load(file)
+            except (json.JSONDecodeError, OSError) as exc:
+                invalid_files += 1
+                continue
 
-            raw_text = clean_text(data.get("text", ""))
+            raw_text = data.get("text", "")
 
-            # Отсекаем технический шум Whisper
-            if any(noise.lower() in raw_text.lower() for noise in NOISE_PHRASES):
+            if not isinstance(raw_text, str):
                 skipped_noise += 1
                 continue
 
-            # В РЕЖИМЕ WHITE: Проверяем на тяжелый токсичный бан-лист
-            if mode == "white" and HARD_TOXIC_PATTERN.search(raw_text):
-                dropped_toxic += 1
-                print(f"[-] [HARD FILTER] Отклонен неприемлемый контент: {raw_text}")
+            raw_text = clean_text(raw_text)
+
+            if not raw_text or contains_noise(raw_text):
+                skipped_noise += 1
                 continue
 
-            # Санитизируем оставшийся текст
             if mode == "white":
-                final_text = sanitize_profanity(raw_text)
+                final_text = sanitize_text(raw_text)
+                if has_forbidden_words(final_text):
+                    dropped_toxic += 1
+                    continue
             else:
                 final_text = raw_text
 
@@ -134,9 +209,9 @@ def process_dataset(mode="white"):
                 skipped_noise += 1
                 continue
 
-            # Дедупликация
-            dedup_key = re.sub(r"[^\w\s]", "", final_text.lower()).strip()
-            if dedup_key in seen_texts:
+            dedup_key = make_dedup_key(final_text)
+
+            if not dedup_key or dedup_key in seen_texts:
                 duplicate_samples += 1
                 continue
 
@@ -153,24 +228,29 @@ def process_dataset(mode="white"):
 
             writer.write(sample)
             valid_samples += 1
+            print(f"[+] [{mode.upper()}] {user_prompt} -> {final_text}")
 
-    print(f"\n==========================================")
+    print("\n==========================================")
     print(f"[+] Сформирован датасет: {output_path}")
-    print(f"[*] Принято образцов в базу: {valid_samples}")
-    print(f"[-] Отсеяно тяжелого 18+ контента: {dropped_toxic}")
+    print(f"[*] Обработано JSON-файлов: {len(input_files)}")
+    print(f"[+] Принято валидных образцов: {valid_samples}")
+    print(f"[-] Отсеяно запрещенного контента: {dropped_toxic}")
     print(f"[-] Отсеяно дубликатов: {duplicate_samples}")
-    print(f"[-] Отсеяно шума: {skipped_noise}")
-    print(f"==========================================")
+    print(f"[-] Отсеяно служебного шума: {skipped_noise}")
+    print("==========================================")
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="MurinTune Dataset Cleaner & Formatter")
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Dataset Cleaner & Formatter")
     parser.add_argument(
         "--mode",
         choices=["white", "raw"],
         default="white",
-        help="Режим: white (фильтрация) или raw (полный срез)",
+        help="Режим обработки: white или raw",
     )
     args = parser.parse_args()
+    process_dataset(args.mode)
 
-    process_dataset(mode=args.mode)
+
+if __name__ == "__main__":
+    main()

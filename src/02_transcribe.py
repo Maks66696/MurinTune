@@ -75,7 +75,7 @@ def transcribe_all():
         print(f"[-] В папке {AUDIO_DIR} нет аудиофайлов!")
         return
 
-    # Пробуем инициализировать модель на GPU
+    
     use_gpu = True
     try:
         model = load_model(use_gpu=True)
