@@ -9,55 +9,37 @@ INPUT_DIR = os.path.join("data", "transcripts_raw")
 OUTPUT_DIR = os.path.join("data", "dataset")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Словарь мягких замен для смыслового мата
-REPLACEMENTS = {
-    r"\bпоху[йиеяю]\b": "все равно",
-    r"\bнаху[йия]\b": "зачем",
-    r"\bоху[еел][а-я]*\b": "в шоке",
-    r"\bебальнич[ео]к\b": "личико",
-    r"\bебал[а-я]*\b": "разнес",
-    r"\bпизд[а-я]*\b": "жесть",
-}
-
-# Матерные слова-паразиты, которые просто удаляем из предложения
-PROFANITY_STRIP = re.compile(
-    r"\b(бля[тд]ь?|сук[аи]|нах|ёпта?|залуп[а-я]*|пиздец)\b[,!.]?", re.IGNORECASE
-)
-
-NOISE_PHRASES = ["ДИНАМИЧНАЯ МУЗЫКА", "[музыка]", "Субтитры делал"]
-
 
 REPLACEMENTS = {
     r"\bпоху[йиеяю][а-я]*\b": "все равно",
+    r"\bнаху[йия]\b": "зачем",
     r"\bоху[еел][а-я]*\b": "в шоке",
-    r"\bеб[а-я]*\b": "личико",  # Любая вариация корня еб* (ебанечек, ебальник)
+    r"\bеб[а-я]*\b": "личико",
 }
 
-# 2. Вырезание слов-паразитов по широким корням
+
 PROFANITY_STRIP = re.compile(
     r"\b(бл[яе][а-я]*|сук[а-я]*|нах[а-я]*|ёпта?|залуп[а-я]*|пизд[а-я]*)\b[,!.]?",
     re.IGNORECASE,
 )
 
+NOISE_PHRASES = ["ДИНАМИЧНАЯ МУЗЫКА", "[музыка]", "Субтитры делал"]
+
 
 def sanitize_profanity(text: str) -> str:
     """Интеллектуальная бронебойная санитизация."""
-    # 1. Смысловые замены
     for pattern, repl in REPLACEMENTS.items():
         text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
 
-    # 2. Вырезание паразитного мата
     text = PROFANITY_STRIP.sub("", text)
 
-    # 3. Нормализация пунктуации и мусора
     text = re.sub(r"\bвсе\s+все\s+равно\b", "все равно", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s*,\s*,+", ",", text)  # убираем двойные запятые
-    text = re.sub(r"^[,\s.!?-]+", "", text)  # мусор в начале строки
-    text = re.sub(r"[,;\s]+$", ".", text)  # заменяем висячую запятую в конце на точку
-    text = re.sub(r"\s+([,.!?])", r"\1", text)  # пробелы перед знаками
+    text = re.sub(r"\s*,\s*,+", ",", text)
+    text = re.sub(r"^[,\s.!?-]+", "", text)
+    text = re.sub(r"[,;\s]+$", ".", text)
+    text = re.sub(r"\s+([,.!?])", r"\1", text)
     text = re.sub(r"\s+", " ", text).strip()
 
-    # Делаем первую букву заглавной
     if text:
         text = text[0].upper() + text[1:]
     return text
@@ -95,8 +77,12 @@ def process_dataset(mode="white"):
         else "Ты — персонаж интернет-культуры. Отвечай эмоционально в своем фирменном стиле."
     )
 
+    
+    seen_texts = set()
+
     valid_samples = 0
     skipped_samples = 0
+    duplicate_samples = 0
 
     with jsonlines.open(output_path, mode="w") as writer:
         for filepath in input_files:
@@ -105,21 +91,30 @@ def process_dataset(mode="white"):
 
             raw_text = clean_text(data.get("text", ""))
 
-            # Отсекаем технические заглушки Whisper
+            
             if any(noise.lower() in raw_text.lower() for noise in NOISE_PHRASES):
                 skipped_samples += 1
                 continue
 
-            # В режиме white мягко санитизируем текст
+            
             if mode == "white":
                 final_text = sanitize_profanity(raw_text)
             else:
                 final_text = raw_text
 
-            # Если после очистки осталось меньше 5 символов — пропускаем
+            
             if len(final_text) < 5:
                 skipped_samples += 1
                 continue
+
+            
+            dedup_key = re.sub(r"[^\w\s]", "", final_text.lower()).strip()
+            if dedup_key in seen_texts:
+                duplicate_samples += 1
+                print(f"[-] [DUPLICATE] Пропущен повтор: {final_text}")
+                continue
+
+            seen_texts.add(dedup_key)
 
             user_prompt = generate_context_user_prompt(final_text)
 
@@ -136,7 +131,9 @@ def process_dataset(mode="white"):
             print(f"[+] [{mode.upper()}] Сохранено: {final_text}")
 
     print(f"\n[+] Сформирован датасет: {output_path}")
-    print(f"[*] Принято образцов: {valid_samples} | Отсеяно пустого шума: {skipped_samples}")
+    print(
+        f"[*] Итог: Принято: {valid_samples} | Отсеяно дубликатов: {duplicate_samples} | Отсеяно шума: {skipped_samples}"
+    )
 
 
 if __name__ == "__main__":
