@@ -1,0 +1,15 @@
+# --- Скачивание и подготовка данных (01, 02, 03) ---------------------------
+yt-dlp>=2024.8.6
+faster-whisper>=1.0.0
+tqdm>=4.66.0
+jsonlines>=4.0.0
+
+# --- Обучение и бенчмарк (04, 05) -------------------------------------------
+# unsloth сам подтягивает torch/transformers/peft/trl нужных версий;
+# ставьте по официальной инструкции под вашу версию CUDA:
+# https://github.com/unslothai/unsloth#installation-instructions
+unsloth @ git+https://github.com/unslothai/unsloth.git
+datasets>=2.19.0
+trl>=0.9.0
+accelerate>=0.30.0
+bitsandbytes>=0.43.0

@@ -4,7 +4,6 @@ venv/
 __pycache__/
 *.pyc
 
-
 data/raw_audio/
 data/filters.json
 data/transcripts_raw/
@@ -16,6 +15,8 @@ models/
 *.bin
 *.gguf
 
+
+adapters/
 
 .vscode/
 .idea/

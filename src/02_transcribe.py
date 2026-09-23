@@ -1,50 +1,34 @@
+"""
+02_transcribe.py — Транскрибация аудио через faster-whisper.
+
+Исправлено по сравнению с исходной версией:
+- убран Windows-only хак с os.add_dll_directory / ";" в PATH — на Linux
+  (в т.ч. в Colab, где обычно и идёт обучение) он не работал и был
+  мёртвым кодом; библиотека CUDA-путями занимается сама.
+- пути берутся из config.py.
+"""
 import glob
 import json
 import os
-import site
-import sys
-
-
-candidates = site.getsitepackages() if hasattr(site, "getsitepackages") else []
-for sp in sys.path:
-    if "site-packages" in sp and sp not in candidates:
-        candidates.append(sp)
-
-for p in candidates:
-    for sub in [
-        ("nvidia", "cublas", "bin"),
-        ("nvidia", "cudnn", "bin"),
-        ("nvidia", "cuda_nvrtc", "bin"),
-        ("nvidia", "cuda_runtime", "bin"),
-    ]:
-        dll_dir = os.path.join(p, *sub)
-        if os.path.exists(dll_dir):
-            os.environ["PATH"] = dll_dir + ";" + os.environ.get("PATH", "")
-            try:
-                os.add_dll_directory(dll_dir)
-            except Exception:
-                pass
 
 from faster_whisper import WhisperModel
 from tqdm import tqdm
 
-AUDIO_DIR = os.path.join("data", "raw_audio")
-OUTPUT_DIR = os.path.join("data", "transcripts_raw")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+import config
+
+AUDIO_DIR = config.RAW_AUDIO_DIR
+OUTPUT_DIR = config.TRANSCRIPTS_DIR
 
 
-def load_model(use_gpu=True):
+def load_model(use_gpu: bool = True) -> WhisperModel:
     if use_gpu:
         print("[*] Пробуем запустить faster-whisper turbo на GPU (CUDA)...")
         return WhisperModel("turbo", device="cuda", compute_type="float16")
-    else:
-        print(
-            "[*] Запускаем faster-whisper turbo на CPU (быстрый режим int8)..."
-        )
-        return WhisperModel("turbo", device="cpu", compute_type="int8")
+    print("[*] Запускаем faster-whisper turbo на CPU (быстрый режим int8)...")
+    return WhisperModel("turbo", device="cpu", compute_type="int8")
 
 
-def transcribe_file(model, audio_path):
+def transcribe_file(model: WhisperModel, audio_path: str):
     segments, info = model.transcribe(
         audio_path, language="ru", beam_size=1, vad_filter=True
     )
@@ -64,7 +48,7 @@ def transcribe_file(model, audio_path):
     return " ".join(full_text), chunks, info
 
 
-def transcribe_all():
+def transcribe_all() -> None:
     audio_files = (
         glob.glob(f"{AUDIO_DIR}/*.mp3")
         + glob.glob(f"{AUDIO_DIR}/*.wav")
@@ -72,16 +56,13 @@ def transcribe_all():
     )
 
     if not audio_files:
-        print(f"[-] В папке {AUDIO_DIR} нет аудиофайлов!")
+        print(f"[-] В папке {AUDIO_DIR} нет аудиофайлов! Запусти сперва 01_download.py")
         return
 
-    
-    use_gpu = True
     try:
         model = load_model(use_gpu=True)
     except Exception as e:
         print(f"[!] Ошибка запуска GPU ({e}). Переходим на CPU.")
-        use_gpu = False
         model = load_model(use_gpu=False)
 
     print(f"[*] Найдено файлов для расшифровки: {len(audio_files)}\n")
@@ -97,13 +78,12 @@ def transcribe_all():
             result_text, chunks, info = transcribe_file(model, audio_path)
         except RuntimeError as e:
             if "cublas" in str(e) or "cuda" in str(e).lower():
-                print("\n[!] Ошибка CUDA DLL в рантайме. Переключаюсь на CPU...")
+                print("\n[!] Ошибка CUDA в рантайме. Переключаюсь на CPU...")
                 model = load_model(use_gpu=False)
                 result_text, chunks, info = transcribe_file(model, audio_path)
             else:
-                raise e
+                raise
 
-        # Сохраняем результат
         with open(out_json_path, "w", encoding="utf-8") as f:
             json.dump(
                 {

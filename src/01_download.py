@@ -1,40 +1,39 @@
+"""
+01_download.py — Батч-загрузка аудио из плейлиста/профиля через yt-dlp.
+
+Без изменений в логике по сравнению с исходной версией — только пути
+теперь берутся из config.py, чтобы не расходиться с остальными скриптами.
+"""
+from __future__ import annotations
+
 import argparse
-import os
 import subprocess
-import sys
 
-OUTPUT_DIR = os.path.join("data", "raw_audio")
-ARCHIVE_FILE = os.path.join("data", "downloaded_archive.txt")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+import config
+
+OUTPUT_DIR = config.RAW_AUDIO_DIR
+ARCHIVE_FILE = config.ARCHIVE_FILE
 
 
-def download_batch(url, max_downloads=None):
+def download_batch(url: str, max_downloads: int | None = None) -> None:
     print(f"[*] Старт загрузки из источника: {url}")
     print(f"[*] Аудио сохраняется в: {OUTPUT_DIR}")
-    print(f"[*] Журнал скачанного ведется в: {ARCHIVE_FILE}\n")
+    print(f"[*] Журнал скачанного ведётся в: {ARCHIVE_FILE}\n")
 
     cmd = [
         "yt-dlp",
         "--extract-audio",
-        "--audio-format",
-        "mp3",
-        "--audio-quality",
-        "0",
-        "--download-archive",
-        ARCHIVE_FILE,
+        "--audio-format", "mp3",
+        "--audio-quality", "0",
+        "--download-archive", str(ARCHIVE_FILE),
         "--ignore-errors",
         "--no-abort-on-error",
-        "--retries",
-        "5",
-        "--fragment-retries",
-        "5",
-
-        "-o",
-        f"{OUTPUT_DIR}/%(id)s.%(ext)s",
+        "--retries", "5",
+        "--fragment-retries", "5",
+        "-o", f"{OUTPUT_DIR}/%(id)s.%(ext)s",
         url,
     ]
 
-    
     if max_downloads:
         cmd.extend(["--max-downloads", str(max_downloads)])
 
@@ -44,7 +43,11 @@ def download_batch(url, max_downloads=None):
     except subprocess.CalledProcessError as e:
         print(f"\n[-] Процесс завершился с кодом: {e}")
     except KeyboardInterrupt:
-        print("\n[!] Скачивание прервано пользователем. Прогресс сохранен!")
+        print("\n[!] Скачивание прервано пользователем. Прогресс сохранён!")
+    except FileNotFoundError:
+        print(
+            "\n[-] yt-dlp не найден. Установите его: pip install -r requirements.txt"
+        )
 
 
 if __name__ == "__main__":
@@ -60,11 +63,9 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    target_url = args.url
-    if not target_url:
-        target_url = input(
-            "Введи ссылку на плейлист/профиль с футажами: "
-        ).strip()
+    target_url = args.url or input(
+        "Введи ссылку на плейлист/профиль с футажами: "
+    ).strip()
 
     if target_url:
         download_batch(target_url, max_downloads=args.limit)
