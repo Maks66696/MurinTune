@@ -1,30 +1,5 @@
 """
 03_build_dataset.py — Сборка train/test JSONL из сырых транскриптов.
-
-Что изменено по сравнению со старым 03_clean_dataset.py:
-
-1. РАНЬШЕ: весь текст одного видео (data['text']) становился ОДНОЙ репликой
-   assistant. Для роликов с музыкой/монтажом это превращало реплику в
-   нечитаемую "простыню" и резко уменьшало число валидных примеров
-   (из 30 видео получилось 8 сэмплов).
-   ТЕПЕРЬ: используем покадровые chunks (start/end/text) из 02_transcribe.py
-   и склеиваем их в реплики разговорного размера (см. config.MERGE_GAP_SECONDS
-   и config.MAX_UTTERANCE_CHARS) — из тех же видео получится в разы больше
-   валидных, более естественных по длине примеров.
-
-2. РАНЬШЕ: не было train/test сплита вообще (test.jsonl всегда пустой).
-   ТЕПЕРЬ: сплит есть, и делается ПО ID ИСХОДНОГО ВИДЕО, а не по строкам —
-   иначе почти одинаковые фразы из одного ролика попадут и в train, и в
-   test, и метрики на test будут врать.
-
-3. РАНЬШЕ: если data/filters.json отсутствовал, скрипт молча продолжал
-   работать без единого реального фильтра (white-версия получалась
-   "белой" только по системному промпту, а не по содержанию).
-   ТЕПЕРЬ: это явное предупреждение с инструкцией, и для --mode white
-   без --allow-empty-filters скрипт не даст сгенерировать датасет.
-
-filters.json специально в .gitignore (может содержать чувствительные
-списки слов) — создайте его локально по образцу data/filters.example.json.
 """
 from __future__ import annotations
 
@@ -53,8 +28,6 @@ DEFAULT_FILTERS = {
     "noise_phrases": [],
 }
 
-# Более широкий пул синтетических реплик пользователя — используется как
-# запасной вариант, когда не сработало ни одно контекстное правило ниже.
 GENERIC_USER_PROMPTS = [
     "Что думаешь по этому поводу?",
     "Какие новости, друн?",
@@ -89,7 +62,6 @@ def load_filters() -> dict:
         print(f"[!] Файл фильтров не найден: {config.FILTERS_FILE}")
         print("    Скопируйте data/filters.example.json -> data/filters.json")
         print("    и заполните списки под свои требования к white-версии.")
-        print("    Без него white-датасет НЕ будет реально отфильтрован!")
         print("=" * 70)
         return DEFAULT_FILTERS
 
@@ -107,28 +79,39 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
-def has_forbidden_words(text: str, filters: dict) -> bool:
-    normalized = text.lower().replace("ё", "е")
-    words = re.findall(r"[а-яa-z]+", normalized)
+def has_gambling_or_noise(text: str, filters: dict) -> bool:
+    """Проверка на казино и рекламу (работает и в raw, и в white)."""
+    norm = text.lower().replace("ё", "е")
+    for term in filters.get("gambling_terms", []):
+        if term.lower() in norm:
+            return True
+    return False
 
-    protected = filters["protected_fragments"]
-    blocked_substrings = filters["blocked_substrings"]
-    blocked_stems = filters["blocked_stems"]
-    gambling_terms = filters["gambling_terms"]
-    target_analogs = filters["target_analogs"]
+
+def has_forbidden_words(text: str, filters: dict) -> bool:
+    """Проверка на мат и токсичность (для white-режима)."""
+    norm = text.lower().replace("ё", "е")
+
+    # 1. Проверяем фразы-оскорбления целиком
+    for sub in filters.get("blocked_substrings", []):
+        if sub.lower() in norm:
+            return True
+
+    # 2. Проверяем отдельные слова по корням с защитой от ложных срабатываний
+    words = re.findall(r"[а-яa-z0-9_-]+", norm)
+    protected = filters.get("protected_fragments", [])
+    blocked_stems = filters.get("blocked_stems", [])
+    target_analogs = filters.get("target_analogs", {})
 
     for word in words:
-        if any(fragment in word for fragment in protected):
+        if any(frag in word for frag in protected):
             continue
-        if any(fragment in word for fragment in blocked_substrings):
-            return True
         if any(stem in word for stem in blocked_stems):
-            return True
-        if any(term in word for term in gambling_terms):
             return True
         for target, safe_words in target_analogs.items():
             if target in word and not any(safe in word for safe in safe_words):
                 return True
+
     return False
 
 
@@ -155,15 +138,10 @@ def clean_text(text: str) -> str:
 
 def contains_noise(text: str, filters: dict) -> bool:
     lower_text = text.lower()
-    return any(phrase.lower() in lower_text for phrase in filters["noise_phrases"])
+    return any(phrase.lower() in lower_text for phrase in filters.get("noise_phrases", []))
 
 
 def iter_utterances(transcript: dict):
-    """
-    Склеивает покадровые chunks в реплики разговорного размера.
-    Падаем обратно на data['text'] целиком, если chunks нет (старые
-    транскрипты или ручной ввод без таймкодов).
-    """
     chunks = transcript.get("chunks") or []
     if not chunks:
         text = transcript.get("text", "")
@@ -212,7 +190,6 @@ def make_dedup_key(text: str) -> str:
 
 
 def split_train_test(video_ids: list[str]) -> set[str]:
-    """Детерминированный сплит по id видео (hash-based, без random.seed-гонок)."""
     n_test = max(config.MIN_TEST_SAMPLES, round(len(video_ids) * config.TEST_SIZE))
     n_test = min(n_test, len(video_ids))
 
@@ -232,7 +209,7 @@ def process_dataset(mode: str, allow_empty_filters: bool) -> None:
     if mode == "white" and filters_are_empty and not allow_empty_filters:
         print(
             "[-] Останавливаюсь: для --mode white нужен настоящий data/filters.json "
-            "(или явно передайте --allow-empty-filters, если вы это тестовый прогон)."
+            "(или явно передайте --allow-empty-filters, если это тестовый прогон)."
         )
         return
 
@@ -242,8 +219,6 @@ def process_dataset(mode: str, allow_empty_filters: bool) -> None:
         return
 
     system_prompt = config.SYSTEM_PROMPTS[mode]
-
-    # Собираем валидные сэмплы по video_id, чтобы потом честно разбить на train/test
     samples_by_video: dict[str, list[dict]] = defaultdict(list)
     seen_texts: set[str] = set()
 
@@ -264,6 +239,11 @@ def process_dataset(mode: str, allow_empty_filters: bool) -> None:
 
             if not text or len(text) < config.MIN_UTTERANCE_CHARS or contains_noise(text, filters):
                 stats["noise"] += 1
+                continue
+
+            # Казино отсекаем ВСЕГДА (и в white, и в raw)
+            if has_gambling_or_noise(text, filters):
+                stats["toxic"] += 1
                 continue
 
             if mode == "white":

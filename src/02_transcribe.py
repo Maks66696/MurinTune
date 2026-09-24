@@ -1,11 +1,5 @@
 """
 02_transcribe.py — Транскрибация аудио через faster-whisper.
-
-Исправлено по сравнению с исходной версией:
-- убран Windows-only хак с os.add_dll_directory / ";" в PATH — на Linux
-  (в т.ч. в Colab, где обычно и идёт обучение) он не работал и был
-  мёртвым кодом; библиотека CUDA-путями занимается сама.
-- пути берутся из config.py.
 """
 import glob
 import json
@@ -30,7 +24,12 @@ def load_model(use_gpu: bool = True) -> WhisperModel:
 
 def transcribe_file(model: WhisperModel, audio_path: str):
     segments, info = model.transcribe(
-        audio_path, language="ru", beam_size=1, vad_filter=True
+        audio_path,
+        language="ru",
+        beam_size=1,
+        vad_filter=True,
+        condition_on_previous_text=False,
+        initial_prompt="Меллстрой, стрим, бурмалда, друн, боровка, пацаны, чат.",
     )
     full_text = []
     chunks = []

@@ -1,29 +1,5 @@
 """
 04_train.py — Дообучение малой LLM в стиле Меллстроя (Unsloth + QLoRA).
-
-В исходном проекте это должно было жить в notebooks/train_unsloth.ipynb —
-но файл был полностью пустой (0 ячеек), то есть шаг обучения не был
-реализован вообще. Это скрипт вместо ноутбука: то же самое можно
-запускать и в Colab через `!python src/04_train.py --mode white`, и
-на своей машине с GPU.
-
-Для двух версий персонажа обучаются ДВА ОТДЕЛЬНЫХ LoRA-адаптера поверх
-одной и той же базовой модели — переключение между "white" и "raw"
-происходит просто сменой адаптера, без повторной загрузки базовой модели.
-
-Требования: GPU с 8 ГБ VRAM для Gemma 4 E2B (базовая модель по умолчанию,
-см. config.py). E4B официально требует уже ~10 ГБ — на 8-гигабайтной карте
-не гарантируется.
-
-Важно про Gemma 4: у E2B/E4B были баги с общим KV-кэшем между слоями при
-use_cache=False (стандартная связка QLoRA + gradient checkpointing) — на
-момент написания Unsloth уже пофиксил это в своей библиотеке. Просто
-держите unsloth актуальным (requirements.txt тянет последнюю версию с
-GitHub), отдельно ничего чинить не нужно.
-
-Запуск:
-    python src/04_train.py --mode white
-    python src/04_train.py --mode raw --epochs 5
 """
 import argparse
 import os
@@ -54,7 +30,6 @@ def train(mode: str, epochs: int, base_model: str, output_dir: str) -> None:
     )
     tokenizer = get_chat_template(tokenizer, chat_template=config.CHAT_TEMPLATE)
 
-    
     model = FastModel.get_peft_model(
         model,
         finetune_vision_layers=False,
@@ -80,7 +55,6 @@ def train(mode: str, epochs: int, base_model: str, output_dir: str) -> None:
         )
 
     def formatting_func(examples):
-        
         texts = [
             tokenizer.apply_chat_template(
                 convo, tokenize=False, add_generation_prompt=False
@@ -114,18 +88,20 @@ def train(mode: str, epochs: int, base_model: str, output_dir: str) -> None:
             seed=config.RANDOM_SEED,
             output_dir=checkpoints_dir,
             report_to="none",
-            
             save_strategy="epoch",
             save_total_limit=2,
         ),
     )
 
-    
-    trainer = train_on_responses_only(
-        trainer,
-        instruction_part="<start_of_turn>user\n",
-        response_part="<start_of_turn>model\n",
-    )
+    # Автоматически определяет токены Gemma 4 (<|turn>user\n, <|turn>model\n)
+    try:
+        trainer = train_on_responses_only(trainer)
+    except Exception:
+        trainer = train_on_responses_only(
+            trainer,
+            instruction_part="<|turn>user\n",
+            response_part="<|turn>model\n",
+        )
 
     trainer.train()
 
