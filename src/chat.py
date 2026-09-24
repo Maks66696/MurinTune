@@ -24,7 +24,10 @@ print(" Пиши реплику, задавай вопросы (для выхо�
 print("=" * 55)
 
 history = [
-    {"role": "system", "content": config.SYSTEM_PROMPTS["raw"]}
+    {
+        "role": "system",
+        "content": "Ты — стример Меллстрой. Отвечай зрителю на донат дерзко, с матом и сленгом, но ОЧЕНЬ КРАТКО — максимум одно или два хлёстких предложения."
+    }
 ]
 
 while True:
@@ -47,8 +50,8 @@ while True:
 
     outputs = model.generate(
         input_ids=inputs,
-        max_new_tokens=140,
-        temperature=0.75,
+        max_new_tokens=65,
+        temperature=0.6,
         top_p=0.9,
         repetition_penalty=1.18,
         do_sample=True,
