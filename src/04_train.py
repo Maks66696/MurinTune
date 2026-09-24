@@ -8,11 +8,11 @@ import config
 
 
 def train(mode: str, epochs: int, base_model: str, output_dir: str) -> None:
+    from unsloth import FastModel, is_bf16_supported
+    from unsloth.chat_templates import get_chat_template, train_on_responses_only
     from datasets import load_dataset
     from transformers import TrainingArguments
     from trl import SFTTrainer
-    from unsloth import FastModel, is_bf16_supported
-    from unsloth.chat_templates import get_chat_template, train_on_responses_only
 
     train_path = os.path.join(config.DATASET_DIR, f"train_{mode}.jsonl")
     if not os.path.exists(train_path) or os.path.getsize(train_path) == 0:
@@ -21,12 +21,16 @@ def train(mode: str, epochs: int, base_model: str, output_dir: str) -> None:
             f"  python src/03_build_dataset.py --mode {mode}"
         )
 
+    import torch
+    torch.cuda.empty_cache()
+
     print(f"[*] Загружаю базовую модель: {base_model}")
     model, tokenizer = FastModel.from_pretrained(
         model_name=base_model,
         max_seq_length=config.MAX_SEQ_LENGTH,
         load_in_4bit=True,
         dtype=None,
+        device_map="cuda:0",
     )
     tokenizer = get_chat_template(tokenizer, chat_template=config.CHAT_TEMPLATE)
 

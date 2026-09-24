@@ -3,7 +3,7 @@ venv/
 
 __pycache__/
 *.pyc
-
+data/dataset/
 data/raw_audio/
 data/filters.json
 data/transcripts_raw/
@@ -21,3 +21,4 @@ adapters/
 .vscode/
 .idea/
 .ipynb_checkpoints/
+unsloth_compiled_cache/

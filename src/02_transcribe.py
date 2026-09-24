@@ -1,9 +1,26 @@
 """
-02_transcribe.py — Транскрибация аудио через faster-whisper.
+02_transcribe.py — Транскрибация аудио через faster-whisper с поддержкой CUDA на Windows.
 """
 import glob
 import json
 import os
+import sys
+
+# --- Исправление для поиска CUDA / cuDNN DLL на Windows ---
+if sys.platform == "win32":
+    venv_base = sys.prefix
+    nvidia_dirs = [
+        os.path.join(venv_base, "Lib", "site-packages", "nvidia", "cublas", "bin"),
+        os.path.join(venv_base, "Lib", "site-packages", "nvidia", "cudnn", "bin"),
+        os.path.join(venv_base, "Lib", "site-packages", "torch", "lib"),
+    ]
+    for p in nvidia_dirs:
+        if os.path.exists(p):
+            try:
+                os.add_dll_directory(p)
+                os.environ["PATH"] = p + ";" + os.environ["PATH"]
+            except Exception:
+                pass
 
 from faster_whisper import WhisperModel
 from tqdm import tqdm
@@ -17,6 +34,7 @@ OUTPUT_DIR = config.TRANSCRIPTS_DIR
 def load_model(use_gpu: bool = True) -> WhisperModel:
     if use_gpu:
         print("[*] Пробуем запустить faster-whisper turbo на GPU (CUDA)...")
+        # float16 идеален для карт серии RTX 30xx
         return WhisperModel("turbo", device="cuda", compute_type="float16")
     print("[*] Запускаем faster-whisper turbo на CPU (быстрый режим int8)...")
     return WhisperModel("turbo", device="cpu", compute_type="int8")
@@ -61,7 +79,7 @@ def transcribe_all() -> None:
     try:
         model = load_model(use_gpu=True)
     except Exception as e:
-        print(f"[!] Ошибка запуска GPU ({e}). Переходим на CPU.")
+        print(f"\n[!] Ошибка запуска GPU: {e}\n[!] Переходим на CPU...")
         model = load_model(use_gpu=False)
 
     print(f"[*] Найдено файлов для расшифровки: {len(audio_files)}\n")
