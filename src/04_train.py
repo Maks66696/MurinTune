@@ -32,13 +32,11 @@ import config
 
 
 def train(mode: str, epochs: int, base_model: str, output_dir: str) -> None:
-    # Импорты внутри функции: unsloth/torch тяжёлые и нужны только на шаге
-    # обучения — так скрипт можно хотя бы --help без GPU-окружения.
     from datasets import load_dataset
     from transformers import TrainingArguments
     from trl import SFTTrainer
     from unsloth import FastModel, is_bf16_supported
-    from unsloth.chat_templates import get_chat_template
+    from unsloth.chat_templates import get_chat_template, train_on_responses_only
 
     train_path = os.path.join(config.DATASET_DIR, f"train_{mode}.jsonl")
     if not os.path.exists(train_path) or os.path.getsize(train_path) == 0:
@@ -56,10 +54,7 @@ def train(mode: str, epochs: int, base_model: str, output_dir: str) -> None:
     )
     tokenizer = get_chat_template(tokenizer, chat_template=config.CHAT_TEMPLATE)
 
-    # Gemma 4 через FastModel настраивается именованными флагами по группам
-    # слоёв, а не списком target_modules (это специфика мультимодальной
-    # архитектуры Gemma 4 — см. официальный рецепт Unsloth). Мы обучаем
-    # только текстовую часть.
+    
     model = FastModel.get_peft_model(
         model,
         finetune_vision_layers=False,
@@ -85,9 +80,7 @@ def train(mode: str, epochs: int, base_model: str, output_dir: str) -> None:
         )
 
     def formatting_func(examples):
-        # Процессор сам добавит <bos> перед обучением — убираем дубль,
-        # который иначе вставляет apply_chat_template (так делает и
-        # официальный рецепт Unsloth для Gemma 4).
+        
         texts = [
             tokenizer.apply_chat_template(
                 convo, tokenize=False, add_generation_prompt=False
@@ -121,7 +114,17 @@ def train(mode: str, epochs: int, base_model: str, output_dir: str) -> None:
             seed=config.RANDOM_SEED,
             output_dir=checkpoints_dir,
             report_to="none",
+            
+            save_strategy="epoch",
+            save_total_limit=2,
         ),
+    )
+
+    
+    trainer = train_on_responses_only(
+        trainer,
+        instruction_part="<start_of_turn>user\n",
+        response_part="<start_of_turn>model\n",
     )
 
     trainer.train()
