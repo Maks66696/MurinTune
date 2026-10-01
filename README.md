@@ -1,140 +1,119 @@
-# MurinTune
+# 🏙️ MurinTune
 
-Пайплайн для дообучения небольшой LLM на речи из футажей/мэшапов —
-две версии персонажа на одной базовой модели:
+<p align="center">
+  <a href="https://huggingface.co/mxbtv/MurinTune-E2B-GGUF">
+    <img src="https://img.shields.io/badge/🤗%20Hugging%20Face-MurinTune--E2B--GGUF-yellow?style=for-the-badge" alt="Hugging Face">
+  </a>
+  <img src="https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/PyTorch-2.6.0%2Bcu124-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white" alt="PyTorch">
+  <img src="https://img.shields.io/badge/Unsloth-QLoRA%20(4--bit)-brightgreen?style=for-the-badge" alt="Unsloth">
+</p>
 
-- **white** — очищенная от мата и токсичной лексики версия (только
-  нейтральный сленг: "друн", "бурмалда" и т.п.);
-- **raw** — оригинал без сглаживания.
+> 📦 **Готовая GGUF-модель для LM Studio / Ollama:** [huggingface.co/mxbtv/MurinTune-E2B-GGUF](https://huggingface.co/mxbtv/MurinTune-E2B-GGUF)
 
-Обе версии — отдельные LoRA-адаптеры поверх одной и той же базовой модели,
-переключение между ними не требует перезагрузки базовой модели.
+**MurinTune** — сквозной программный конвейер для автоматического сбора речевых данных, транскрибации, семантической модерации и параметрически эффективного дообучения (**QLoRA**) больших языковых моделей на базе `Gemma-4-E2B-it`. Модель адаптирована для воспроизведения эмоционально-экспрессивного разговорного дискурса, неологизмов и фольклора современного молодежного интернет-сообщества.
 
-> ⚠️ Это фан-проект по стилизации под публичного человека. Если бот будет
-> где-то использоваться публично — явно подписывайте его как неофициальную
-> AI-пародию, а не как реальные слова человека, чтобы не вводить людей в
-> заблуждение.
+Проект разработан в рамках индивидуального исследовательского проекта:  
+> **«Исследование методов эффективного дообучения больших языковых моделей для адаптации под индивидуальный речевой стиль»**
 
-## Пайплайн
+---
 
+## 🏗️ Архитектура пайплайна
+
+```text
+[01_download.py]       -> Скачивание аудио (yt-dlp) в data/raw_audio/*.mp3
+[02_transcribe.py]     -> ASR-распознавание (faster-whisper Turbo на CUDA) в data/transcripts_raw/*.json
+[dump_json.py]         -> Агрегация всех транскриптов в data/all_phrases.json
+[03_build_v1_dataset]  -> Фильтрация шума/запрещенки + семантический подбор вопросов -> train/test.jsonl
+[04_train.py]          -> 4-bit QLoRA дообучение через Unsloth (RTX 3060 Ti 8GB) -> adapters/raw/
+[export_gguf.py]       -> Слияние весов и квантование в GGUF (Q4_K_M) -> models/
+[chat.py]              -> Интерактивный диалоговый чат с моделью в терминале
 ```
-01_download.py       -> data/raw_audio/*.mp3
-02_transcribe.py     -> data/transcripts_raw/*.json   (текст + покадровые chunks)
-03_build_dataset.py  -> data/dataset/{train,test}_{white,raw}.jsonl
-04_train.py          -> adapters/{white,raw}/          (LoRA-адаптеры)
-05_benchmark.py       — сравнение база vs дообученная модель на test-сете
-```
 
-### 1. Установка
+---
 
+## 🚀 Установка и настройка окружения (Windows / Linux)
+
+### 1. Клонирование и виртуальное окружение
 ```bash
-python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
+git clone https://github.com/Maks66696/MurinTune.git
+cd MurinTune
+python -m venv venv
+# Windows PowerShell:
+.\venv\Scripts\Activate.ps1
+# Linux / macOS:
+source venv/bin/activate
+```
+
+### 2. Установка зависимостей с поддержкой CUDA
+```bash
+# Установка PyTorch с поддержкой CUDA 12.4
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+# Установка Triton для Windows и Unsloth
+pip install triton-windows==3.2.0.post19
+pip install unsloth unsloth_zoo
 pip install -r requirements.txt
 ```
+*(Для работы `01_download.py` требуется установленный в системе `ffmpeg`)*.
 
-Для `01_download.py` дополнительно нужен `ffmpeg` в PATH (нужен yt-dlp для
-конвертации аудио).
+---
 
-Для `04_train.py`/`05_benchmark.py` нужна CUDA-видеокарта. Ставьте
-`unsloth` по официальной инструкции под вашу версию CUDA/torch:
-https://github.com/unslothai/unsloth#installation-instructions
-(в Colab обычно всё работает "из коробки" после `pip install unsloth`).
-
-### 2. Скачивание футажей
+## 🛠️ Запуск полного цикла обучения
 
 ```bash
-python src/01_download.py "https://ссылка-на-профиль-или-плейлист" --limit 200
-```
+# 1. Скачивание аудиоматериалов
+python src/01_download.py "ссылка_на_профиль_или_плейлист" --limit 1000
 
-Ведёт журнал скачанного в `data/downloaded_archive.txt` — повторный запуск
-не скачивает уже загруженное.
-
-### 3. Транскрибация
-
-```bash
+# 2. Нейросетевая транскрибация речи
 python src/02_transcribe.py
+
+# 3. Агрегация и семантическая модерация датасета (800+ диалогов)
+python src/dump_json.py
+python src/03_build_v1_dataset.py
+
+# 4. QLoRA-дообучение на видеокарте (занимает ~1-2 часа на RTX 3060 Ti)
+python src/04_train.py --mode raw --epochs 3
+
+# 5. Экспорт в формат GGUF (Q4_K_M)
+python src/export_gguf.py
+
+# 6. Запуск живого диалога в консоли
+python src/chat.py
 ```
 
-Автоматически пробует GPU (faster-whisper `turbo`), при ошибке падает
-обратно на CPU. Результат — по одному JSON на файл с полным текстом и
-покадровыми `chunks` (start/end/text).
+---
 
-### 4. Фильтры для white-версии
+## 📊 Характеристики модели и метрики (v0.5 Beta)
 
-```bash
-cp data/filters.example.json data/filters.json
-```
+| Метрика | Значение |
+| :--- | :--- |
+| **Базовая модель** | `unsloth/gemma-4-E2B-it-bnb-4bit` (5.1 млрд параметров) |
+| **Обучаемые параметры** | 24,158,208 (0.47% от общего объема весов) |
+| **Обучающий корпус** | 803 диалоговые пары (вычищены из 1026 видео) |
+| **Тестовая выборка** | 110 диалоговых пар |
+| **Финальная функция потерь (Loss)** | **1.725** (средний `train_loss: 2.865`) |
+| **Аппаратные ресурсы** | NVIDIA GeForce RTX 3060 Ti (8.0 GB VRAM, пик 7.7 GB) |
+| **Время обучения** | 2 часа 15 минут (303 шага) |
 
-Заполните `data/filters.json` своими списками (структура и назначение
-каждого поля описаны прямо в `_readme` внутри примера). Файл специально
-в `.gitignore` — можно не бояться закоммитить туда явную лексику по
-ошибке.
+---
 
-### 5. Сборка датасета
+## ⚠️ ВНИМАНИЕ / DISCLAIMER (18+)
+* Модель является **юмористической сатирой и художественной AI-пародией** (*parody / satire*).
+* Содержит обилие **ненормативной лексики**, экспрессивного сленга и интернет-абсурда.
+* Проект создан исключительно в образовательных и научно-исследовательских целях в сфере компьютерной лингвистики (NLP).
+* Автор не разделяет и не пропагандирует высказывания, генерируемые нейросетью.
 
-```bash
-python src/03_build_dataset.py --mode raw
-python src/03_build_dataset.py --mode white   # требует заполненный filters.json
-```
+---
 
-Каждое видео режется на реплики разговорного размера по покадровым
-`chunks` (а не превращается в одну сплошную "простыню" текста на всё
-видео — так было раньше и давало на порядок меньше валидных примеров).
-Train/test делятся **по id видео**, а не по строкам, чтобы почти
-одинаковые фразы из одного ролика не оказались одновременно в обеих
-выборках и не завысили метрики на test.
+## 📚 Цитирование (BibTeX)
 
-### 6. Обучение
-
-```bash
-python src/04_train.py --mode white
-python src/04_train.py --mode raw --epochs 5
-```
-
-QLoRA-дообучение через Unsloth (4-бит, по умолчанию
-[`gemma-4-E2B-it-unsloth-bnb-4bit`](https://huggingface.co/unsloth/gemma-4-E2B-it-unsloth-bnb-4bit)
-— по официальной документации Unsloth это размер, который реально обучается
-на 8 ГБ VRAM; E4B требует уже ~10 ГБ, на 3060 Ti не гарантированно влезет).
-Адаптеры сохраняются в `adapters/white/` и `adapters/raw/`.
-
-### 7. Проверка результата
-
-```bash
-python src/05_benchmark.py --mode white --n 10
-```
-
-Печатает по каждому примеру из test-сета: эталонную фразу, ответ базовой
-модели и ответ дообученной — плюс перплексию дообученной модели на
-эталоне (чем ниже, тем увереннее модель в стиле; это не метрика
-"качества ответа", оценивать нужно глазами по самим ответам).
-
-## Известное ограничение: размер датасета
-
-С исходных ~30 роликов текущая версия пайплайна собирает на порядок
-больше примеров, чем старая (за счёт разбиения на реплики вместо
-целых видео), но для устойчивого переноса стиля этого всё ещё мало —
-`04_train.py` печатает предупреждение, если в train меньше ~200
-примеров. Если после дообучения модель просто повторяет заученные
-фразы дословно вместо того чтобы обобщать стиль — это почти всегда
-значит "нужно больше исходных видео", а не "не так подобраны
-гиперпараметры".
-
-## Структура
-
-```
-data/
-  downloaded_archive.txt   # журнал yt-dlp, что уже скачано
-  filters.example.json     # шаблон фильтров (закоммичен)
-  filters.json             # ваши реальные фильтры (в .gitignore)
-  raw_audio/               # скачанное аудио (в .gitignore)
-  transcripts_raw/         # JSON-транскрипты (в .gitignore)
-  dataset/                 # train/test JSONL для обеих версий
-adapters/                  # LoRA-адаптеры и чекпоинты (в .gitignore)
-src/
-  config.py                # общие пути и гиперпараметры
-  01_download.py
-  02_transcribe.py
-  03_build_dataset.py
-  04_train.py
-  05_benchmark.py
+```bibtex
+@misc{murintune2026,
+  author = {Maks66696},
+  title = {MurinTune: Pipeline for Efficient Speech Style Adaptation of LLMs},
+  year = {2026},
+  publisher = {GitHub},
+  howpublished = {\url{https://github.com/Maks66696/MurinTune}}
+}
 ```
