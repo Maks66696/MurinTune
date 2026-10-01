@@ -3,6 +3,7 @@ venv/
 
 __pycache__/
 *.pyc
+data/
 data/dataset/
 data/raw_audio/
 data/filters.json
